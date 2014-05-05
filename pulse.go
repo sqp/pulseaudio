@@ -1,4 +1,4 @@
-package main
+package pulseaudio
 
 import (
 	"github.com/guelfey/go.dbus" // imported as dbus.
