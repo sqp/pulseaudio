@@ -2,10 +2,10 @@ package pulseaudio
 
 import (
 	"github.com/guelfey/go.dbus" // imported as dbus.
-	// "github.com/guelfey/go.dbus/introspect"
 
 	"errors"
 	"log"
+	"reflect"
 	"strings"
 )
 
@@ -14,320 +14,480 @@ const (
 	DbusPath = "/org/pulseaudio/core1"
 )
 
-type Core struct {
-	dbusCore  *dbus.Object
-	conn      *dbus.Conn
-	err       []error
-	hooks     Hooks
-	Callbacks Callbacks
+type Client struct {
+	conn   *dbus.Conn
+	hooker *Hooker
 }
 
-// NewCore creates a pulseaudio Dbus session.
+// New creates a new pulseaudio Dbus client session.
 //
-func NewCore() (*Core, error) { // chan *dbus.Signal
-
-	addr := "unix:path=/run/user/1000/pulse/dbus-socket"
-
-	conn, e := dbus.Dial(addr)
-	if e != nil {
-		return nil, e
+func New() (*Client, error) { // chan *dbus.Signal
+	addr, es := serverLookup()
+	if es != nil {
+		return nil, es
 	}
-	if e = conn.Auth(nil); e != nil {
+
+	conn, ed := dbus.Dial(addr)
+	if ed != nil {
+		return nil, ed
+	}
+
+	if ea := conn.Auth(nil); ea != nil {
 		conn.Close()
-		return nil, e
+		return nil, ea
 	}
 
-	pulse := &Core{
-		conn:      conn,
-		dbusCore:  conn.Object(DbusIf, DbusPath),
-		hooks:     make(Hooks),
-		Callbacks: DefaultCallbacks(),
+	pulse := &Client{
+		conn:   conn,
+		hooker: NewHooker(),
 	}
 
-	if pulse.dbusCore == nil {
-		conn.Close()
-		return nil, errors.New("no Dbus interface")
-	}
-
-	pulse.ListenForSignal("NewSink", []dbus.ObjectPath{})
-	pulse.ListenForSignal("SinkRemoved", []dbus.ObjectPath{})
-	pulse.ListenForSignal("NewPlaybackStream", []dbus.ObjectPath{})
-	pulse.ListenForSignal("PlaybackStreamRemoved", []dbus.ObjectPath{})
-
-	pulse.ListenForSignal("Stream.VolumeUpdated", []dbus.ObjectPath{})
-	pulse.ListenForSignal("Device.VolumeUpdated", []dbus.ObjectPath{})
+	pulse.hooker.AddCalls(PulseCalls)
+	pulse.hooker.AddTypes(PulseTypes)
 
 	return pulse, nil
 }
 
-// ListenForSignal registers a new event to listen.
+// Register connects an object to the pulseaudio events hooks it implements.
+// If the object declares any of the method in the On... interfaces list, it
+// will be registered to receive those events.
 //
-func (pulse *Core) ListenForSignal(name string, paths []dbus.ObjectPath) {
-	args := []interface{}{DbusIf + "." + name, paths}
-	pulse.testErr(pulse.dbusCore.Call("ListenForSignal", 0, args...).Err)
+func (pulse *Client) Register(obj interface{}) (errs []error) {
+	tolisten := pulse.hooker.Register(obj)
+	for _, name := range tolisten {
+		e := pulse.ListenForSignal(name, []dbus.ObjectPath{})
+		if e != nil {
+			errs = append(errs, e)
+		}
+	}
+	return errs
 }
 
+// Unregister disconnects an object from the pulseaudio events hooks.
 //
-//----------------------------------------------------------[ LOOP & SIGNALS ]--
+func (pulse *Client) Unregister(obj interface{}) (errs []error) {
+	tounlisten := pulse.hooker.Unregister(obj)
+	for _, name := range tounlisten {
+		e := pulse.StopListeningForSignal(name)
+		if e != nil {
+			errs = append(errs, e)
+		}
+	}
+	return errs
+}
 
 // Listen awaits for pulseaudio messages and dispatch events to registered clients.
 //
-func (pulse *Core) Listen() {
-	c := make(chan *dbus.Message, 10)
-	pulse.conn.Eavesdrop(c)
+func (pulse *Client) Listen() {
+	c := make(chan *dbus.Signal, 10)
+	pulse.conn.Signal(c)
 
-	for msg := range c {
-		switch msg.Type {
-		case dbus.TypeSignal:
-			s := msg.ToSignal()
-			pulse.DispatchSignal(s)
-
-			// 	case dbus.TypeMethodCall:
-		}
+	for s := range c {
+		pulse.DispatchSignal(s)
 	}
 }
 
 // DispatchSignal forwards a signal event to the registered clients.
 //
-func (pulse *Core) DispatchSignal(s *dbus.Signal) {
-	if strings.HasPrefix(string(s.Name), DbusIf+".") {
-		name := s.Name[len(DbusIf)+1:]
-
-		if call, ok := pulse.Callbacks[name]; ok { // Signal name defined.
-			if hooks, ok := pulse.hooks[name]; ok { // Hook clients found.
-				for _, uncast := range hooks {
-					call(s, uncast)
-				}
-				return
-			}
+func (pulse *Client) DispatchSignal(s *dbus.Signal) {
+	name := strings.TrimPrefix(string(s.Name), DbusIf+".")
+	if name != s.Name { // dbus interface matched.
+		if pulse.hooker.Call(name, s) {
+			return // signal was defined (even if no clients are connected).
 		}
 	}
-
 	log.Println("unknown signal", s.Name, s.Path)
+}
+
+//
+//------------------------------------------------------------[ DBUS METHODS ]--
+
+// ListenForSignal registers a new event to listen.
+//
+func (pulse *Client) ListenForSignal(name string, paths []dbus.ObjectPath) error {
+	args := []interface{}{DbusIf + "." + name, paths}
+	return pulse.Core().Call("ListenForSignal", 0, args...).Err
+}
+
+// StopListeningForSignal unregisters an listened event.
+//
+func (pulse *Client) StopListeningForSignal(name string) error {
+	return pulse.Core().Call("StopListeningForSignal", 0, DbusIf+"."+name).Err
 }
 
 //
 //-----------------------------------------------------[ CALLBACK INTERFACES ]--
 
-type DefineNewPlaybackStream interface {
+type OnFallbackSinkUpdated interface {
+	FallbackSinkUpdated(dbus.ObjectPath)
+}
+
+type OnFallbackSinkUnset interface {
+	FallbackSinkUnset()
+}
+
+type OnNewSink interface {
+	NewSink(dbus.ObjectPath)
+}
+
+type OnSinkRemoved interface {
+	SinkRemoved(dbus.ObjectPath)
+}
+
+type OnNewPlaybackStream interface {
 	NewPlaybackStream(dbus.ObjectPath)
 }
 
-type DefineDeviceVolumeUpdated interface {
-	DeviceVolumeUpdated(dbus.ObjectPath, []uint32)
+type OnPlaybackStreamRemoved interface {
+	PlaybackStreamRemoved(dbus.ObjectPath)
 }
 
-type DefineStreamVolumeUpdated interface {
+type OnDeviceVolumeUpdated interface {
+	DeviceVolumeUpdated(dbus.ObjectPath, []uint32)
+}
+type OnDeviceMuteUpdated interface {
+	DeviceMuteUpdated(dbus.ObjectPath, bool)
+}
+
+type OnStreamVolumeUpdated interface {
 	StreamVolumeUpdated(dbus.ObjectPath, []uint32)
+}
+
+type OnStreamMuteUpdated interface {
+	StreamMuteUpdated(dbus.ObjectPath, bool)
 }
 
 //
 //--------------------------------------------------------[ CALLBACK METHODS ]--
 
-// DefaultCallbacks provides callbacks for events to forward to an uncasted object.
-// The signal arguments will be casted to their usefull type so they can be used
-// directly by clients.
+// PulseCalls defines callbacks methods to call the matching object method with
+// type-asserted arguments.
+// Public so it can be hacked before the first Register.
 //
-func DefaultCallbacks() Callbacks {
-	return Callbacks{
-		"NewPlaybackStream": func(s *dbus.Signal, uncast interface{}) {
-			uncast.(DefineNewPlaybackStream).NewPlaybackStream(s.Path)
-		},
-
-		"Device.VolumeUpdated": func(s *dbus.Signal, uncast interface{}) {
-			uncast.(DefineDeviceVolumeUpdated).DeviceVolumeUpdated(s.Path, s.Body[0].([]uint32))
-		},
-
-		"Stream.VolumeUpdated": func(s *dbus.Signal, uncast interface{}) {
-			uncast.(DefineStreamVolumeUpdated).StreamVolumeUpdated(s.Path, s.Body[0].([]uint32))
-		},
-	}
+var PulseCalls = Calls{
+	"FallbackSinkUpdated":   func(m Msg) { m.O.(OnFallbackSinkUpdated).FallbackSinkUpdated(m.P) },
+	"FallbackSinkUnset":     func(m Msg) { m.O.(OnFallbackSinkUnset).FallbackSinkUnset() },
+	"NewSink":               func(m Msg) { m.O.(OnNewSink).NewSink(m.P) },
+	"SinkRemoved":           func(m Msg) { m.O.(OnSinkRemoved).SinkRemoved(m.P) },
+	"NewPlaybackStream":     func(m Msg) { m.O.(OnNewPlaybackStream).NewPlaybackStream(m.D[0].(dbus.ObjectPath)) },
+	"PlaybackStreamRemoved": func(m Msg) { m.O.(OnPlaybackStreamRemoved).PlaybackStreamRemoved(m.D[0].(dbus.ObjectPath)) },
+	"Device.VolumeUpdated":  func(m Msg) { m.O.(OnDeviceVolumeUpdated).DeviceVolumeUpdated(m.P, m.D[0].([]uint32)) },
+	"Device.MuteUpdated":    func(m Msg) { m.O.(OnDeviceMuteUpdated).DeviceMuteUpdated(m.P, m.D[0].(bool)) },
+	"Stream.VolumeUpdated":  func(m Msg) { m.O.(OnStreamVolumeUpdated).StreamVolumeUpdated(m.P, m.D[0].([]uint32)) },
+	"Stream.MuteUpdated":    func(m Msg) { m.O.(OnStreamMuteUpdated).StreamMuteUpdated(m.P, m.D[0].(bool)) },
 }
 
-// Register connects an object to the pulseaudio events hooks it implements.
-// If the object declares any of the method in the Define interfaces list, it
-// will be registered to receive those events.
+// PulseTypes defines interface types for events to register.
+// Public so it can be hacked before the first Register.
 //
-func (pulse *Core) Register(obj interface{}) {
-	if _, ok := obj.(DefineNewPlaybackStream); ok {
-		pulse.hooks.Append("NewPlaybackStream", obj)
-	}
+var PulseTypes = map[string]reflect.Type{
+	"FallbackSinkUpdated":   reflect.TypeOf((*OnFallbackSinkUpdated)(nil)).Elem(),
+	"FallbackSinkUnset":     reflect.TypeOf((*OnFallbackSinkUnset)(nil)).Elem(),
+	"NewSink":               reflect.TypeOf((*OnNewSink)(nil)).Elem(),
+	"SinkRemoved":           reflect.TypeOf((*OnSinkRemoved)(nil)).Elem(),
+	"NewPlaybackStream":     reflect.TypeOf((*OnNewPlaybackStream)(nil)).Elem(),
+	"PlaybackStreamRemoved": reflect.TypeOf((*OnPlaybackStreamRemoved)(nil)).Elem(),
+	"Device.VolumeUpdated":  reflect.TypeOf((*OnDeviceVolumeUpdated)(nil)).Elem(),
+	"Device.MuteUpdated":    reflect.TypeOf((*OnDeviceMuteUpdated)(nil)).Elem(),
+	"Stream.VolumeUpdated":  reflect.TypeOf((*OnStreamVolumeUpdated)(nil)).Elem(),
+	"Stream.MuteUpdated":    reflect.TypeOf((*OnStreamMuteUpdated)(nil)).Elem(),
+}
 
-	if _, ok := obj.(DefineDeviceVolumeUpdated); ok {
-		pulse.hooks.Append("Device.VolumeUpdated", obj)
-	}
+//
+//------------------------------------------------------------------[ COMMON ]--
 
-	if _, ok := obj.(DefineStreamVolumeUpdated); ok {
-		pulse.hooks.Append("Stream.VolumeUpdated", obj)
+// serverLookup asks the main service for the location of the real service.
+// It's the only thing the pulseaudio service do on the main session dbus.
+// On my system, it returns  "unix:path=/run/user/1000/pulse/dbus-socket"
+//
+func serverLookup() (string, error) {
+	conn, es := dbus.SessionBus()
+	if es != nil {
+		return "", es
 	}
+	srv := NewObject(conn, "org.PulseAudio1", "/org/pulseaudio/server_lookup1")
+	addr, ep := srv.GetProperty("org.PulseAudio.ServerLookup1.Address")
+	if ep != nil {
+		return "", ep
+	}
+	return addr.Value().(string), nil
+}
+
+//
+
+// The next part could (should) be moved as another package^w lib)
+
+//
+//-------------------------------------------------------------[ FACTO PROPS ]--
+
+// Object extends the dbus Object with properties access methods.
+//
+type Object struct {
+	*dbus.Object
+	prefix string
+}
+
+// NewObject creates a dbus Object with properties access methods.
+//
+func NewObject(conn *dbus.Conn, interf string, path dbus.ObjectPath) *Object {
+	return &Object{conn.Object(interf, path), interf}
+}
+
+// Get queries an object property and return it as a raw dbus.Variant.
+//
+func (dev *Object) Get(property string) (dbus.Variant, error) {
+	return dev.GetProperty(dev.location(property))
+}
+
+// GetValue queries an object property and set it to dest.
+// dest must be of the same type as returned data for the method.
+//
+func (dev *Object) GetValue(name string, dest interface{}) (e error) {
+	v, e := dev.Get(name)
+	if e != nil {
+		return e
+	}
+	return cast(v.Value(), dest)
+}
+
+// Set updates the given object property with value.
+//
+func (dev *Object) Set(property string, value interface{}) error {
+	return dev.SetProperty(dev.location(property), dbus.MakeVariant(value))
+}
+
+func (dev *Object) location(property string) string {
+	return dev.prefix + "." + property
+}
+
+//
+//---------------------------------------------------[ GET CASTED PROPERTIES ]--
+
+// Bool queries an object property and return it as bool.
+//
+func (dev *Object) Bool(name string) (val bool, e error) {
+	e = dev.GetValue(name, &val)
+	return val, e
+}
+
+// Uint32 queries an object property and return it as uint32.
+//
+func (dev *Object) Uint32(name string) (val uint32, e error) {
+	e = dev.GetValue(name, &val)
+	return val, e
+}
+
+// Uint64 queries an object property and return it as uint64.
+//
+func (dev *Object) Uint64(name string) (val uint64, e error) {
+	e = dev.GetValue(name, &val)
+	return val, e
+}
+
+// String queries an object property and return it as string.
+//
+func (dev *Object) String(name string) (val string, e error) {
+	e = dev.GetValue(name, &val)
+	return val, e
+}
+
+// ObjectPath queries an object property and return it as string.
+//
+func (dev *Object) ObjectPath(name string) (val dbus.ObjectPath, e error) {
+	e = dev.GetValue(name, &val)
+	return val, e
+}
+
+// ListUint32 queries an object property and return it as []uint32.
+//
+func (dev *Object) ListUint32(name string) (val []uint32, e error) {
+	e = dev.GetValue(name, &val)
+	return val, e
+}
+
+// ListString queries an object property and return it as []string.
+//
+func (dev *Object) ListString(name string) (val []string, e error) {
+	e = dev.GetValue(name, &val)
+	return val, e
+}
+
+// ListPath queries an object property and return it as []dbus.ObjectPath.
+//
+func (dev *Object) ListPath(name string) (val []dbus.ObjectPath, e error) {
+	e = dev.GetValue(name, &val)
+	return val, e
+}
+
+// MapString queries an object property and return it as map[string]string.
+//
+func (dev *Object) MapString(name string) (map[string]string, error) {
+	var asbytes map[string][]byte
+	e := dev.GetValue(name, &asbytes)
+	if e != nil {
+		return nil, e
+	}
+	val := make(map[string]string)
+	for k, v := range asbytes {
+		if len(v) > 0 {
+			val[k] = string(v[:len(v)-1]) // remove \0 at end.
+		}
+	}
+	return val, nil
+}
+
+func cast(src interface{}, dest interface{}) (e error) {
+	switch c := dest.(type) {
+	case *bool:
+		*c = src.(bool)
+
+	case *uint32:
+		*c = src.(uint32)
+
+	case *uint64:
+		*c = src.(uint64)
+
+	case *string:
+		*c = src.(string)
+
+	case *dbus.ObjectPath:
+		*c = src.(dbus.ObjectPath)
+
+	case *[]uint32:
+		*c = src.([]uint32)
+
+	case *[]string:
+		*c = src.([]string)
+
+	case *[]dbus.ObjectPath:
+		*c = src.([]dbus.ObjectPath)
+
+	case *map[string][]byte:
+		*c = src.(map[string][]byte)
+
+	default:
+		e = errors.New("cast fail")
+	}
+	return
 }
 
 //
 //-------------------------------------------------------------------[ HOOKS ]--
 
-// Callback defines an event callback method.
+// Msg defines an dbus signal event message.
 //
-type Callback func(*dbus.Signal, interface{})
+type Msg struct {
+	O interface{}     // client object.
+	P dbus.ObjectPath // signal path.
+	D []interface{}   // signal data.
+}
 
-// Callback defines a list of event callback methods indexed by dbus method name.
+// Calls defines a list of event callback methods indexed by dbus method name.
 //
-type Callbacks map[string]Callback
+type Calls map[string]func(Msg)
+
+// Types defines a list of interfaces types indexed by dbus method name.
+//
+type Types map[string]reflect.Type
 
 // Hook defines a list of objects indexed by the methods they implement.
-// An object can be references multiple times.
+// An object can be referenced multiple times.
 // If an object declares all methods, he will be referenced in every field.
+//   hooker:= NewHooker()
+//   hooker.AddCalls(myCalls)
+//   hooker.AddTypes(myTypes)
 //
-type Hooks map[string][]interface{}
-
-// Append adds an object to the list for the given index name.
+//   // create a type with some of your callback methods and register it.
+//   tolisten := hooker.Register(obj) // tolisten is the list of events you may have to listen.
 //
-func (hook Hooks) Append(name string, obj interface{}) {
-	hook[name] = append(hook[name], obj)
+//   // add the signal forwarder in your events listening loop.
+//   matched := Call(signalName, dbusSignal)
+//
+type Hooker struct {
+	Hooks map[string][]interface{}
+	Calls Calls
+	Types Types
 }
 
+// NewHooker handles a loosely coupled hook interface to forward dbus signals
+// to registered clients.
 //
-//--------------------------------------------------------------[ PROPERTIES ]--
-
-// Name returns the service name.
-//
-func (pulse *Core) Name() string {
-	uncast, e := pulse.GetProperty("Name")
-	pulse.testErr(e)
-	return uncast.(string)
-}
-
-// Sinks
-//
-func (pulse *Core) Sinks() []dbus.ObjectPath {
-	uncast, e := pulse.GetProperty("Sinks")
-	pulse.testErr(e)
-	return uncast.([]dbus.ObjectPath)
-}
-
-func (pulse *Core) PlaybackStreams() []dbus.ObjectPath {
-	uncast, e := pulse.GetProperty("PlaybackStreams")
-	pulse.testErr(e)
-	return uncast.([]dbus.ObjectPath)
-}
-
-func (pulse *Core) Volume(sink dbus.ObjectPath) []uint32 {
-	obj := pulse.conn.Object(DbusIf+".Device", sink)
-
-	uncast, e := obj.GetProperty("org.PulseAudio.Core1.Device.Volume")
-	if pulse.testErr(e) {
-		return []uint32{}
+func NewHooker() *Hooker {
+	return &Hooker{
+		Hooks: make(map[string][]interface{}),
+		Calls: make(Calls),
+		Types: make(Types),
 	}
-	return uncast.Value().([]uint32)
 }
 
-func (pulse *Core) GetProperty(name string) (interface{}, error) {
-	v, e := pulse.dbusCore.GetProperty("org.PulseAudio.Core1." + name)
-	return v.Value(), e
-}
-
-// e = sink.SetProperty("org.PulseAudio.Core1.Device.Volume", dbus.MakeVariant([]uint32{32000, 32000}))
-// log.Err(e, "SetVolume")
-
+// Call forwards a Dbus event to registered clients for this event.
 //
-//------------------------------------------------------------------[ ERRORS ]--
-
-func (pulse *Core) Failed() bool {
-	return len(pulse.err) > 0
-}
-
-func (pulse *Core) testErr(e error) bool {
-	if e != nil {
-		pulse.err = append(pulse.err, e)
+func (hook Hooker) Call(name string, s *dbus.Signal) bool {
+	call, ok := hook.Calls[name]
+	if !ok { // Signal name not defined.
+		return false
 	}
-	return e != nil
-}
-
-//
-//-------------------------------------------------------------------[ CLIENT ]--
-
-// AppPulse is a client that connects 3 callbacks.
-type AppPulse struct{}
-
-func (ap *AppPulse) NewPlaybackStream(path dbus.ObjectPath) {
-	log.Println("one: new stream", path)
-}
-
-func (ap *AppPulse) DeviceVolumeUpdated(path dbus.ObjectPath, values []uint32) {
-	log.Println("one: device volume", path, values)
-}
-
-func (ap *AppPulse) StreamVolumeUpdated(path dbus.ObjectPath, values []uint32) {
-	log.Println("one: stream volume", path, values)
-}
-
-// ClientTwo is a client that connects only one callback.
-type ClientTwo struct{}
-
-func (ap *ClientTwo) DeviceVolumeUpdated(path dbus.ObjectPath, values []uint32) {
-	log.Println("two: volume updated", path)
-}
-
-// Create a pulse dbus service with 2 clients.
-func main() {
-	pulse, e := NewCore()
-	if e != nil {
-		log.Panicln("connect", e)
+	if list, ok := hook.Hooks[name]; ok { // Hook clients found.
+		for _, obj := range list {
+			call(Msg{obj, s.Path, s.Body})
+		}
 	}
-
-	app := &AppPulse{}
-	pulse.Register(app)
-
-	two := &ClientTwo{}
-	pulse.Register(two)
-
-	// log.Println(pulse.Name())
-	// log.Println(pulse.Sinks())
-	// log.Println(pulse.PlaybackStreams())
-	// log.Println(pulse.Volume(dbus.ObjectPath(DbusPath + "/sink0")))
-
-	pulse.Listen()
+	return true
 }
 
+// Register connects an object to the events hooks it implements.
+// If the object implements any of the interfaces types declared, it will be
+// registered to receive the matching events.
+// //
+func (hook Hooker) Register(obj interface{}) (tolisten []string) {
+	t := reflect.ValueOf(obj).Type()
+	for name, modelType := range hook.Types {
+		if t.Implements(modelType) {
+			hook.Hooks[name] = append(hook.Hooks[name], obj)
+			if len(hook.Hooks[name]) == 1 { // First client registered for this event. need to listen.
+				tolisten = append(tolisten, name)
+			}
+		}
+	}
+	return tolisten
+}
+
+// Unregister disconnects an object from the events hooks.
 //
+func (hook Hooker) Unregister(obj interface{}) (tounlisten []string) {
+	for name, list := range hook.Hooks {
+		hook.Hooks[name] = hook.remove(list, obj)
+		if len(hook.Hooks[name]) == 0 {
+			delete(hook.Hooks, name)
+			tounlisten = append(tounlisten, name) // No more clients, need to unlisten.
+		}
+	}
+	return tounlisten
+}
 
-// introspect
-
-// s, ei := introspect.Call(pulse.dbusCore)
-// log.Err(ei, "intro")
-// for _, interf := range s.Interfaces {
-// 	log.Println(interf.Name)
-// 	for _, sig := range interf.Methods {
-// 		log.Println("  method", sig)
-// 	}
-
-// 	log.Println(interf.Name)
-// 	for _, sig := range interf.Signals {
-// 		log.Println("  signal", sig)
-// 	}
-// }
-
+// AddCalls registers a list of callback methods.
 //
+func (hook Hooker) AddCalls(calls Calls) {
+	for name, call := range calls {
+		hook.Calls[name] = call
+	}
+}
 
+// AddTypes registers a list of interfaces types.
 //
-//------------------------------------------------------------------[ COMMON ]--
+func (hook Hooker) AddTypes(tests Types) {
+	for name, test := range tests {
+		hook.Types[name] = test
+	}
+}
 
-// func MsgToSignal(msg *dbus.Message) *dbus.Signal {
-
-// 	log.Println(msg.Headers[dbus.FieldSender])
-
-// 	iface := msg.Headers[dbus.FieldInterface].String()
-// 	member := msg.Headers[dbus.FieldMember].String()
-// 	// sender := msg.Headers[dbus.FieldSender].String()
-// 	return &dbus.Signal{
-// 		// Sender: sender,
-// 		Path: dbus.ObjectPath(msg.Headers[dbus.FieldPath].String()),
-// 		Name: iface + "." + member,
-// 		Body: msg.Body,
-// 	}
-// }
-
-// func (pulse *Core) call(name string, s *dbus.Signal, call func(*dbus.Signal, interface{})) {
-// 	for _, uncast := range pulse.hooks[name] {
-// 		call(s, uncast)
-// 	}
-// }
+// remove removes an object from the list if found.
+//
+func (hook Hooker) remove(list []interface{}, obj interface{}) []interface{} {
+	for i, test := range list {
+		if obj == test {
+			return append(list[:i], list[i+1:]...)
+		}
+	}
+	return list
+}
