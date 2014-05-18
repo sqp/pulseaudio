@@ -371,6 +371,29 @@ func cast(src interface{}, dest interface{}) (e error) {
 	return
 }
 
+// SetProperty calls org.freedesktop.DBus.Properties.Set on the given object.
+// The property name must be given in interface.member notation.
+//
+// TODO: Should be moved to the dbus api.
+//
+func (o *Object) SetProperty(p string, v dbus.Variant) error {
+	idx := strings.LastIndex(p, ".")
+	if idx == -1 || idx+1 == len(p) {
+		return errors.New("dbus: invalid property " + p)
+	}
+
+	iface := p[:idx]
+	prop := p[idx+1:]
+
+	err := o.Call("org.freedesktop.DBus.Properties.Set", 0, iface, prop, v).Err
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 //
 //-------------------------------------------------------------------[ HOOKS ]--
 
