@@ -121,7 +121,7 @@ informations here. Feel free to check the upstream source.
 */
 package pulseaudio
 
-import "github.com/guelfey/go.dbus" // imported as dbus.
+import "github.com/godbus/dbus"
 
 // Core controls the pulseaudio core.
 //

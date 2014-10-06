@@ -1,7 +1,7 @@
 package pulseaudio
 
 import (
-	"github.com/guelfey/go.dbus" // imported as dbus.
+	"github.com/godbus/dbus"
 
 	"errors"
 	"log"
