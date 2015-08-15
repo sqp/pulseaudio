@@ -3,6 +3,11 @@ Package pulseaudio controls a pulseaudio server through its Dbus interface.
 
 This is a pure go binding for the pulseaudio Dbus interface.
 
+Note that you will have to enable the dbus module of your pulseaudio server.
+This can be done by adding this line in /etc/pulse/default.pa
+(or /etc/pulse/system.pa, if system-wide daemon is used):
+
+    load-module module-dbus-protocol
 
 
 
@@ -200,7 +205,7 @@ import "github.com/godbus/dbus"
 //     Clients            All currently connected clients.
 //
 func (pulse *Client) Core() *Object {
-	return NewObject(pulse.conn, DbusIf, DbusPath)
+	return NewObject(pulse.conn, DbusInterface, DbusPath)
 }
 
 // Device controls a pulseaudio device.
@@ -282,7 +287,7 @@ func (pulse *Client) Core() *Object {
 //     !PropertyList       The device's property list.
 //
 func (pulse *Client) Device(sink dbus.ObjectPath) *Object {
-	return NewObject(pulse.conn, DbusIf+".Device", sink)
+	return NewObject(pulse.conn, DbusInterface+".Device", sink)
 }
 
 // Stream controls a pulseaudio stream.
@@ -326,11 +331,11 @@ func (pulse *Client) Device(sink dbus.ObjectPath) *Object {
 //    !PropertyList   The stream's property list.
 //
 func (pulse *Client) Stream(sink dbus.ObjectPath) *Object {
-	return NewObject(pulse.conn, DbusIf+".Stream", sink)
+	return NewObject(pulse.conn, DbusInterface+".Stream", sink)
 }
 
 // Client controls a pulseaudio client.
 //
 func (pulse *Client) Client(sink dbus.ObjectPath) *Object {
-	return NewObject(pulse.conn, DbusIf+".Client", sink)
+	return NewObject(pulse.conn, DbusInterface+".Client", sink)
 }

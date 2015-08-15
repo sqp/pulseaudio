@@ -9,11 +9,14 @@ import (
 	"strings"
 )
 
+// Dbus objects paths.
 const (
-	DbusIf   = "org.PulseAudio.Core1"
-	DbusPath = "/org/pulseaudio/core1"
+	DbusInterface = "org.PulseAudio.Core1"
+	DbusPath      = "/org/pulseaudio/core1"
 )
 
+// Client manages a pulseaudio Dbus client session.
+//
 type Client struct {
 	conn   *dbus.Conn
 	hooker *Hooker
@@ -90,7 +93,7 @@ func (pulse *Client) Listen() {
 // DispatchSignal forwards a signal event to the registered clients.
 //
 func (pulse *Client) DispatchSignal(s *dbus.Signal) {
-	name := strings.TrimPrefix(string(s.Name), DbusIf+".")
+	name := strings.TrimPrefix(string(s.Name), DbusInterface+".")
 	if name != s.Name { // dbus interface matched.
 		if pulse.hooker.Call(name, s) {
 			return // signal was defined (even if no clients are connected).
@@ -105,54 +108,65 @@ func (pulse *Client) DispatchSignal(s *dbus.Signal) {
 // ListenForSignal registers a new event to listen.
 //
 func (pulse *Client) ListenForSignal(name string, paths []dbus.ObjectPath) error {
-	args := []interface{}{DbusIf + "." + name, paths}
+	args := []interface{}{DbusInterface + "." + name, paths}
 	return pulse.Core().Call("ListenForSignal", 0, args...).Err
 }
 
 // StopListeningForSignal unregisters an listened event.
 //
 func (pulse *Client) StopListeningForSignal(name string) error {
-	return pulse.Core().Call("StopListeningForSignal", 0, DbusIf+"."+name).Err
+	return pulse.Core().Call("StopListeningForSignal", 0, DbusInterface+"."+name).Err
 }
 
 //
 //-----------------------------------------------------[ CALLBACK INTERFACES ]--
 
+// OnFallbackSinkUpdated is an interface to the FallbackSinkUpdated method.
 type OnFallbackSinkUpdated interface {
 	FallbackSinkUpdated(dbus.ObjectPath)
 }
 
+// OnFallbackSinkUnset is an interface to the FallbackSinkUnset method.
 type OnFallbackSinkUnset interface {
 	FallbackSinkUnset()
 }
 
+// OnNewSink is an interface to the NewSink method.
 type OnNewSink interface {
 	NewSink(dbus.ObjectPath)
 }
 
+// OnSinkRemoved is an interface to the SinkRemoved method.
 type OnSinkRemoved interface {
 	SinkRemoved(dbus.ObjectPath)
 }
 
+// OnNewPlaybackStream is an interface to the NewPlaybackStream method.
 type OnNewPlaybackStream interface {
 	NewPlaybackStream(dbus.ObjectPath)
 }
 
+// OnPlaybackStreamRemoved is an interface to the PlaybackStreamRemoved method.
 type OnPlaybackStreamRemoved interface {
 	PlaybackStreamRemoved(dbus.ObjectPath)
 }
 
+// OnDeviceVolumeUpdated is an interface to the DeviceVolumeUpdated method.
 type OnDeviceVolumeUpdated interface {
 	DeviceVolumeUpdated(dbus.ObjectPath, []uint32)
 }
+
+// OnDeviceMuteUpdated is an interface to the DeviceMuteUpdated method.
 type OnDeviceMuteUpdated interface {
 	DeviceMuteUpdated(dbus.ObjectPath, bool)
 }
 
+// OnStreamVolumeUpdated is an interface to the StreamVolumeUpdated method.
 type OnStreamVolumeUpdated interface {
 	StreamVolumeUpdated(dbus.ObjectPath, []uint32)
 }
 
+// OnStreamMuteUpdated is an interface to the StreamMuteUpdated method.
 type OnStreamMuteUpdated interface {
 	StreamMuteUpdated(dbus.ObjectPath, bool)
 }
@@ -223,7 +237,7 @@ func serverLookup() (string, error) {
 // Object extends the dbus Object with properties access methods.
 //
 type Object struct {
-	*dbus.Object
+	dbus.BusObject
 	prefix string
 }
 
@@ -376,7 +390,7 @@ func cast(src interface{}, dest interface{}) (e error) {
 //
 // TODO: Should be moved to the dbus api.
 //
-func (o *Object) SetProperty(p string, v dbus.Variant) error {
+func (dev *Object) SetProperty(p string, v dbus.Variant) error {
 	idx := strings.LastIndex(p, ".")
 	if idx == -1 || idx+1 == len(p) {
 		return errors.New("dbus: invalid property " + p)
@@ -385,7 +399,7 @@ func (o *Object) SetProperty(p string, v dbus.Variant) error {
 	iface := p[:idx]
 	prop := p[idx+1:]
 
-	err := o.Call("org.freedesktop.DBus.Properties.Set", 0, iface, prop, v).Err
+	err := dev.Call("org.freedesktop.DBus.Properties.Set", 0, iface, prop, v).Err
 
 	if err != nil {
 		return err
@@ -413,7 +427,7 @@ type Calls map[string]func(Msg)
 //
 type Types map[string]reflect.Type
 
-// Hook defines a list of objects indexed by the methods they implement.
+// Hooker defines a list of objects indexed by the methods they implement.
 // An object can be referenced multiple times.
 // If an object declares all methods, he will be referenced in every field.
 //   hooker:= NewHooker()
