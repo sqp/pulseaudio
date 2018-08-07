@@ -1,8 +1,9 @@
 package main
 
-import pulseaudio ".."
 import (
-	"github.com/guelfey/go.dbus" // imported as dbus.
+	"github.com/godbus/dbus"
+
+	"github.com/sqp/pulseaudio"
 
 	"log"
 	"strconv"
@@ -15,26 +16,38 @@ import (
 //
 type AppPulse struct{}
 
+// NewSink is called when a sink is added.
+//
 func (ap *AppPulse) NewSink(path dbus.ObjectPath) {
 	log.Println("one: NewSink", path)
 }
 
+// SinkRemoved is called when a sink is removed.
+//
 func (ap *AppPulse) SinkRemoved(path dbus.ObjectPath) {
 	log.Println("one: SinkRemoved", path)
 }
 
+// NewPlaybackStream is called when a playback stream is added.
+//
 func (ap *AppPulse) NewPlaybackStream(path dbus.ObjectPath) {
 	log.Println("one: NewPlaybackStream", path)
 }
 
+// PlaybackStreamRemoved is called when a playback stream is removed.
+//
 func (ap *AppPulse) PlaybackStreamRemoved(path dbus.ObjectPath) {
 	log.Println("one: PlaybackStreamRemoved", path)
 }
 
+// DeviceVolumeUpdated is called when the volume has changed on a device.
+//
 func (ap *AppPulse) DeviceVolumeUpdated(path dbus.ObjectPath, values []uint32) {
 	log.Println("one: device volume", path, values)
 }
 
+// StreamVolumeUpdated is called when the volume has changed on a stream.
+//
 func (ap *AppPulse) StreamVolumeUpdated(path dbus.ObjectPath, values []uint32) {
 	log.Println("one: stream volume", path, values)
 }
@@ -45,6 +58,8 @@ type ClientTwo struct {
 	*pulseaudio.Client
 }
 
+// DeviceVolumeUpdated is called when the volume has changed on a device.
+//
 func (two *ClientTwo) DeviceVolumeUpdated(path dbus.ObjectPath, values []uint32) {
 	log.Println("two: volume updated", path)
 }
@@ -124,25 +139,3 @@ func main() {
 
 	pulse.Listen()
 }
-
-//
-
-//
-
-// introspect
-
-// import "github.com/guelfey/go.dbus/introspect"
-
-// s, ei := introspect.Call(pulse.core)
-// log.Err(ei, "intro")
-// for _, interf := range s.Interfaces {
-// 	log.Println(interf.Name)
-// 	for _, sig := range interf.Methods {
-// 		log.Println("  method", sig)
-// 	}
-
-// 	log.Println(interf.Name)
-// 	for _, sig := range interf.Signals {
-// 		log.Println("  signal", sig)
-// 	}
-// }

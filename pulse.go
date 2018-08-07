@@ -5,6 +5,7 @@ import (
 
 	"errors"
 	"log"
+	"os/exec"
 	"reflect"
 	"strings"
 )
@@ -20,6 +21,7 @@ const (
 type Client struct {
 	conn   *dbus.Conn
 	hooker *Hooker
+	ch     chan *dbus.Signal
 }
 
 // New creates a new pulseaudio Dbus client session.
@@ -82,12 +84,19 @@ func (pulse *Client) Unregister(obj interface{}) (errs []error) {
 // Listen awaits for pulseaudio messages and dispatch events to registered clients.
 //
 func (pulse *Client) Listen() {
-	c := make(chan *dbus.Signal, 10)
-	pulse.conn.Signal(c)
+	pulse.ch = make(chan *dbus.Signal, 10)
+	pulse.conn.Signal(pulse.ch)
 
-	for s := range c {
+	for s := range pulse.ch {
 		pulse.DispatchSignal(s)
 	}
+}
+
+// StopListening unregisters an listened event.
+//
+func (pulse *Client) StopListening() {
+	pulse.conn.RemoveSignal(pulse.ch)
+	close(pulse.ch)
 }
 
 // DispatchSignal forwards a signal event to the registered clients.
@@ -527,4 +536,30 @@ func (hook Hooker) remove(list []interface{}, obj interface{}) []interface{} {
 		}
 	}
 	return list
+}
+
+//
+//-------------------------------------------------------[ PULSE DBUS MODULE ]--
+
+// LoadModule loads the PulseAudio DBus module.
+//
+func LoadModule() error {
+	return exec.Command("pacmd", "load-module", "module-dbus-protocol").Run()
+}
+
+// UnloadModule unloads the PulseAudio DBus module.
+//
+func UnloadModule() error {
+	return exec.Command("pacmd", "unload-module", "module-dbus-protocol").Run()
+}
+
+// ModuleIsLoaded tests if the PulseAudio DBus module is loaded.
+//
+func ModuleIsLoaded() (bool, error) {
+	out, e := exec.Command("pacmd", "list-modules").CombinedOutput()
+	if e != nil {
+		return false, e
+	}
+	isLoaded := strings.Contains(string(out), "<module-dbus-protocol>")
+	return isLoaded, nil
 }
