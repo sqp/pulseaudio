@@ -19,31 +19,37 @@ type AppPulse struct{}
 // NewSink is called when a sink is added.
 //
 func (ap *AppPulse) NewSink(path dbus.ObjectPath) {
-	log.Println("one: NewSink", path)
+	log.Println("one: new sink", path)
 }
 
 // SinkRemoved is called when a sink is removed.
 //
 func (ap *AppPulse) SinkRemoved(path dbus.ObjectPath) {
-	log.Println("one: SinkRemoved", path)
+	log.Println("one: sink removed", path)
 }
 
 // NewPlaybackStream is called when a playback stream is added.
 //
 func (ap *AppPulse) NewPlaybackStream(path dbus.ObjectPath) {
-	log.Println("one: NewPlaybackStream", path)
+	log.Println("one: new playback stream", path)
 }
 
 // PlaybackStreamRemoved is called when a playback stream is removed.
 //
 func (ap *AppPulse) PlaybackStreamRemoved(path dbus.ObjectPath) {
-	log.Println("one: PlaybackStreamRemoved", path)
+	log.Println("one: playback stream removed", path)
 }
 
 // DeviceVolumeUpdated is called when the volume has changed on a device.
 //
 func (ap *AppPulse) DeviceVolumeUpdated(path dbus.ObjectPath, values []uint32) {
-	log.Println("one: device volume", path, values)
+	log.Println("one: device volume updated", path, values)
+}
+
+// DeviceActiveCardUpdated is called when active card has changed on a device.
+// i.e. headphones injected.
+func (ap *AppPulse) DeviceActiveCardUpdated(path dbus.ObjectPath, port dbus.ObjectPath) {
+	log.Println("one: device active card updated", path, port)
 }
 
 // StreamVolumeUpdated is called when the volume has changed on a stream.

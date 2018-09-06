@@ -180,6 +180,11 @@ type OnStreamMuteUpdated interface {
 	StreamMuteUpdated(dbus.ObjectPath, bool)
 }
 
+// OnDeviceActivePortUpdated is an interface to the DeviceActivePortUpdated method.
+type OnDeviceActivePortUpdated interface {
+	DeviceActivePortUpdated(dbus.ObjectPath, dbus.ObjectPath)
+}
+
 //
 //--------------------------------------------------------[ CALLBACK METHODS ]--
 
@@ -188,32 +193,34 @@ type OnStreamMuteUpdated interface {
 // Public so it can be hacked before the first Register.
 //
 var PulseCalls = Calls{
-	"FallbackSinkUpdated":   func(m Msg) { m.O.(OnFallbackSinkUpdated).FallbackSinkUpdated(m.P) },
-	"FallbackSinkUnset":     func(m Msg) { m.O.(OnFallbackSinkUnset).FallbackSinkUnset() },
-	"NewSink":               func(m Msg) { m.O.(OnNewSink).NewSink(m.P) },
-	"SinkRemoved":           func(m Msg) { m.O.(OnSinkRemoved).SinkRemoved(m.P) },
-	"NewPlaybackStream":     func(m Msg) { m.O.(OnNewPlaybackStream).NewPlaybackStream(m.D[0].(dbus.ObjectPath)) },
-	"PlaybackStreamRemoved": func(m Msg) { m.O.(OnPlaybackStreamRemoved).PlaybackStreamRemoved(m.D[0].(dbus.ObjectPath)) },
-	"Device.VolumeUpdated":  func(m Msg) { m.O.(OnDeviceVolumeUpdated).DeviceVolumeUpdated(m.P, m.D[0].([]uint32)) },
-	"Device.MuteUpdated":    func(m Msg) { m.O.(OnDeviceMuteUpdated).DeviceMuteUpdated(m.P, m.D[0].(bool)) },
-	"Stream.VolumeUpdated":  func(m Msg) { m.O.(OnStreamVolumeUpdated).StreamVolumeUpdated(m.P, m.D[0].([]uint32)) },
-	"Stream.MuteUpdated":    func(m Msg) { m.O.(OnStreamMuteUpdated).StreamMuteUpdated(m.P, m.D[0].(bool)) },
+	"FallbackSinkUpdated":      func(m Msg) { m.O.(OnFallbackSinkUpdated).FallbackSinkUpdated(m.P) },
+	"FallbackSinkUnset":        func(m Msg) { m.O.(OnFallbackSinkUnset).FallbackSinkUnset() },
+	"NewSink":                  func(m Msg) { m.O.(OnNewSink).NewSink(m.P) },
+	"SinkRemoved":              func(m Msg) { m.O.(OnSinkRemoved).SinkRemoved(m.P) },
+	"NewPlaybackStream":        func(m Msg) { m.O.(OnNewPlaybackStream).NewPlaybackStream(m.D[0].(dbus.ObjectPath)) },
+	"PlaybackStreamRemoved":    func(m Msg) { m.O.(OnPlaybackStreamRemoved).PlaybackStreamRemoved(m.D[0].(dbus.ObjectPath)) },
+	"Device.VolumeUpdated":     func(m Msg) { m.O.(OnDeviceVolumeUpdated).DeviceVolumeUpdated(m.P, m.D[0].([]uint32)) },
+	"Device.MuteUpdated":       func(m Msg) { m.O.(OnDeviceMuteUpdated).DeviceMuteUpdated(m.P, m.D[0].(bool)) },
+	"Device.ActivePortUpdated": func(m Msg) { m.O.(OnDeviceActivePortUpdated).DeviceActivePortUpdated(m.P, m.D[0].(dbus.ObjectPath)) },
+	"Stream.VolumeUpdated":     func(m Msg) { m.O.(OnStreamVolumeUpdated).StreamVolumeUpdated(m.P, m.D[0].([]uint32)) },
+	"Stream.MuteUpdated":       func(m Msg) { m.O.(OnStreamMuteUpdated).StreamMuteUpdated(m.P, m.D[0].(bool)) },
 }
 
 // PulseTypes defines interface types for events to register.
 // Public so it can be hacked before the first Register.
 //
 var PulseTypes = map[string]reflect.Type{
-	"FallbackSinkUpdated":   reflect.TypeOf((*OnFallbackSinkUpdated)(nil)).Elem(),
-	"FallbackSinkUnset":     reflect.TypeOf((*OnFallbackSinkUnset)(nil)).Elem(),
-	"NewSink":               reflect.TypeOf((*OnNewSink)(nil)).Elem(),
-	"SinkRemoved":           reflect.TypeOf((*OnSinkRemoved)(nil)).Elem(),
-	"NewPlaybackStream":     reflect.TypeOf((*OnNewPlaybackStream)(nil)).Elem(),
-	"PlaybackStreamRemoved": reflect.TypeOf((*OnPlaybackStreamRemoved)(nil)).Elem(),
-	"Device.VolumeUpdated":  reflect.TypeOf((*OnDeviceVolumeUpdated)(nil)).Elem(),
-	"Device.MuteUpdated":    reflect.TypeOf((*OnDeviceMuteUpdated)(nil)).Elem(),
-	"Stream.VolumeUpdated":  reflect.TypeOf((*OnStreamVolumeUpdated)(nil)).Elem(),
-	"Stream.MuteUpdated":    reflect.TypeOf((*OnStreamMuteUpdated)(nil)).Elem(),
+	"FallbackSinkUpdated":      reflect.TypeOf((*OnFallbackSinkUpdated)(nil)).Elem(),
+	"FallbackSinkUnset":        reflect.TypeOf((*OnFallbackSinkUnset)(nil)).Elem(),
+	"NewSink":                  reflect.TypeOf((*OnNewSink)(nil)).Elem(),
+	"SinkRemoved":              reflect.TypeOf((*OnSinkRemoved)(nil)).Elem(),
+	"NewPlaybackStream":        reflect.TypeOf((*OnNewPlaybackStream)(nil)).Elem(),
+	"PlaybackStreamRemoved":    reflect.TypeOf((*OnPlaybackStreamRemoved)(nil)).Elem(),
+	"Device.VolumeUpdated":     reflect.TypeOf((*OnDeviceVolumeUpdated)(nil)).Elem(),
+	"Device.MuteUpdated":       reflect.TypeOf((*OnDeviceMuteUpdated)(nil)).Elem(),
+	"Device.ActivePortUpdated": reflect.TypeOf((*OnDeviceActivePortUpdated)(nil)).Elem(),
+	"Stream.VolumeUpdated":     reflect.TypeOf((*OnStreamVolumeUpdated)(nil)).Elem(),
+	"Stream.MuteUpdated":       reflect.TypeOf((*OnStreamMuteUpdated)(nil)).Elem(),
 }
 
 //
