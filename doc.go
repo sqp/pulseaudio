@@ -4,17 +4,18 @@ Package pulseaudio controls a pulseaudio server through its Dbus interface.
 This is a pure go binding for the pulseaudio Dbus interface.
 
 Note that you will have to enable the dbus module of your pulseaudio server.
-This can be done by adding this line in /etc/pulse/default.pa
-(or /etc/pulse/system.pa, if system-wide daemon is used):
+This can now be done with the LoadModule function.
 
-    load-module module-dbus-protocol
+or by adding this line in /etc/pulse/default.pa
+  load-module module-dbus-protocol
 
+(if system-wide daemon is used, instead edit /etc/pulse/system.pa )
 
 
 Registering methods to listen to signals
 
 Create a type that declares any methods matching the pulseaudio interface.
-  Methods will be detected when you declares the object:         Register(myobject)
+  Methods will be detected when you register the object:         Register(myobject)
   Methods will start to receive events when you start the loop:  Listen()
 
 Instead of declaring a big interface and forcing clients to provide every method
@@ -26,7 +27,7 @@ You can register multiple clients at any time on the same pulseaudio session.
 This allow you to split the callback logic of your program and have some parts
 (un)loadable like a client GUI.
 
-See types Define... for the list of callback methods that can be used.
+See types On... for the list of callback methods that can be used.
 
 
 Create a client object with some callback methods to register:
@@ -84,44 +85,20 @@ There are way too many properties to have a dedicated method for each of them.
 
 First you need to get the object implementing the property you need.
 Then you will have to call the method matching the type of returned data for the
-property you want to get.
-
-	// Get the list of sinks from the Core and show some informations about them.
-	// You better handle errors that were not checked here for code clarity.
-
-	sinks, _ := client.Core().ListPath("Sinks") // []ObjectPath
-	for _, sink := range sinks {
-
-		// Get the device to query properties for the stream referenced by his path.
-		dev := client.Device(sink)
-
-		// Get some informations about this stream.
-		name, _ := dev.String("Name")          // string
-		mute, _ := dev.Bool("Mute")            // bool
-		vols, _ := dev.ListUint32("Volume")    // []uint32
-		fmt.Println("sink  ", mute, vols, name)
-	}
+property you want to get. See the example.
 
 Set properties
 
-Methods with the tag RW can also be set.
-
-	// Mute all playback streams.
-	streams, _ := client.Core().ListPath("PlaybackStreams")
-	for _, stream := range streams {
-		dev := client.Stream(stream)
-		e = dev.Set("Mute", true)
-		if e != nil {
-			fmt.Println("mute volume:", e)
-		}
-	}
+Properties with the tag RW can also be set.
 
 Pulseaudio Dbus documentation
 
 http://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/Developer/Clients/DBus/
 
-Dbus documentation was copied and up to date in may 2014 to provide some useful
-informations here. Feel free to check the upstream source.
+Dbus documentation was copied to provide some useful informations here.
+Still valid in august 2018.
+
+Check the upstream source for updates or more informations.
 
 */
 package pulseaudio
@@ -173,14 +150,14 @@ import "github.com/godbus/dbus"
 //                          tells the reading client the client object that is
 //                          assigned to its connection.
 //
-//   []Uint32
+//   ListUint32
 //     !DefaultChannels  RW  The default channel map that is used when initializing a
 //                           device and the configuration information doesn't specify
 //                           the desired channel map. The default channel count can be
 //                           inferred from this. The channel map is expressed as a
 //                           list of channel positions,
 //
-//   []String
+//   ListString
 //     Extensions    All available server extension interfaces. Each extension interface
 //                   defines an unique string that clients can search from this array.
 //                   The string should contain a version part so that if backward
@@ -194,7 +171,7 @@ import "github.com/godbus/dbus"
 //                   of D-Bus interface names, but that is not enforced.
 //                   The clients should treat the strings as opaque identifiers.
 //
-//   []ObjectPath
+//   ListPath
 //     Cards              All currently available cards.
 //     Sinks              All currently available sinks.
 //     Sources            All currently available sources.
@@ -269,7 +246,7 @@ func (pulse *Client) Core() *Object {
 //     !ActivePort  RW   The currently active device port.
 //                       This property doesn't exist if the device does not have any ports.
 //
-//   []Uint32
+//   ListUint32
 //     Channels    The channel map of the device. The channel count can be inferred from this.
 //                 The channel map is expressed as a list of channel positions.
 //     Volume  RW  The volume of the device. The array is matched against the Channels property:
@@ -279,11 +256,11 @@ func (pulse *Client) Core() *Object {
 //                   or you can precisely control the individual channels by passing an array
 //                   containing a value for each channel.
 //
-//   []ObjectPath
+//   ListPath
 //     Ports     All available device ports. May be empty.
 //
 //
-//   {String -> [Byte]}  == map[string]string ??
+//   MapString
 //     !PropertyList       The device's property list.
 //
 func (pulse *Client) Device(sink dbus.ObjectPath) *Object {
@@ -321,13 +298,13 @@ func (pulse *Client) Device(sink dbus.ObjectPath) *Object {
 //    Client    The client whose stream this is. Not all streams are created by clients, in those cases this property does not exist.
 //    Device   The device this stream is connected to.
 //
-//  []Uint32
+//  ListUint32
 //    Channels   The channel map of the stream. The channel count can be inferred from this. The channel map is expressed as a list of channel positions, see [[Software/PulseAudio/Documentation/Developer/Clients/DBus/Enumerations]] for the list of possible channel position values.
 //    Volume  RW   The volume of the stream. The array is matched against the Channels property: the first array element is the volume of the first channel in the Channels property, and so on.
 //                 There are two ways to adjust the volume. You can either adjust the overall volume by giving a single-value array, or you can precisely control the individual channels by passing an array containing a value for each channel.
 //                 The volume can only be written if VolumeWritable is true.
 //
-//  Type: {String -> [Byte]}
+//  MapString
 //    !PropertyList   The stream's property list.
 //
 func (pulse *Client) Stream(sink dbus.ObjectPath) *Object {

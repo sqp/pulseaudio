@@ -3,8 +3,7 @@ package pulseaudio
 import (
 	"github.com/godbus/dbus"
 
-	"errors"
-	"log"
+	"fmt"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -19,38 +18,47 @@ const (
 // Client manages a pulseaudio Dbus client session.
 //
 type Client struct {
-	conn   *dbus.Conn
-	hooker *Hooker
-	ch     chan *dbus.Signal
+	conn          *dbus.Conn
+	hooker        *Hooker
+	ch            chan *dbus.Signal
+	unknownSignal func(*dbus.Signal)
 }
 
 // New creates a new pulseaudio Dbus client session.
 //
 func New() (*Client, error) { // chan *dbus.Signal
-	addr, es := serverLookup()
-	if es != nil {
-		return nil, es
+	addr, e := serverLookup()
+	if e != nil {
+		return nil, e
 	}
 
-	conn, ed := dbus.Dial(addr)
-	if ed != nil {
-		return nil, ed
+	conn, e := dbus.Dial(addr)
+	if e != nil {
+		return nil, e
 	}
 
-	if ea := conn.Auth(nil); ea != nil {
+	e = conn.Auth(nil)
+	if e != nil {
 		conn.Close()
-		return nil, ea
+		return nil, e
 	}
 
 	pulse := &Client{
-		conn:   conn,
-		hooker: NewHooker(),
+		conn:          conn,
+		hooker:        NewHooker(),
+		unknownSignal: func(s *dbus.Signal) { fmt.Println("unknown signal", s.Name, s.Path) },
 	}
 
 	pulse.hooker.AddCalls(PulseCalls)
 	pulse.hooker.AddTypes(PulseTypes)
 
 	return pulse, nil
+}
+
+// Close closes the DBus connection. The client can't be reused after.
+//
+func (pulse *Client) Close() error {
+	return pulse.conn.Close()
 }
 
 // Register connects an object to the pulseaudio events hooks it implements.
@@ -60,7 +68,7 @@ func New() (*Client, error) { // chan *dbus.Signal
 func (pulse *Client) Register(obj interface{}) (errs []error) {
 	tolisten := pulse.hooker.Register(obj)
 	for _, name := range tolisten {
-		e := pulse.ListenForSignal(name, []dbus.ObjectPath{})
+		e := pulse.ListenForSignal(name)
 		if e != nil {
 			errs = append(errs, e)
 		}
@@ -108,7 +116,13 @@ func (pulse *Client) DispatchSignal(s *dbus.Signal) {
 			return // signal was defined (even if no clients are connected).
 		}
 	}
-	log.Println("unknown signal", s.Name, s.Path)
+	pulse.unknownSignal(s)
+}
+
+// SetOnUnknownSignal sets the unknown signal logger callback. Optional
+//
+func (pulse *Client) SetOnUnknownSignal(call func(s *dbus.Signal)) {
+	pulse.unknownSignal = call
 }
 
 //
@@ -116,7 +130,7 @@ func (pulse *Client) DispatchSignal(s *dbus.Signal) {
 
 // ListenForSignal registers a new event to listen.
 //
-func (pulse *Client) ListenForSignal(name string, paths []dbus.ObjectPath) error {
+func (pulse *Client) ListenForSignal(name string, paths ...dbus.ObjectPath) error {
 	args := []interface{}{DbusInterface + "." + name, paths}
 	return pulse.Core().Call("ListenForSignal", 0, args...).Err
 }
@@ -231,9 +245,9 @@ var PulseTypes = map[string]reflect.Type{
 // On my system, it returns  "unix:path=/run/user/1000/pulse/dbus-socket"
 //
 func serverLookup() (string, error) {
-	conn, es := dbus.SessionBus()
-	if es != nil {
-		return "", es
+	conn, e := dbus.SessionBus()
+	if e != nil {
+		return "", e
 	}
 	srv := NewObject(conn, "org.PulseAudio1", "/org/pulseaudio/server_lookup1")
 	addr, ep := srv.GetProperty("org.PulseAudio.ServerLookup1.Address")
@@ -263,31 +277,39 @@ func NewObject(conn *dbus.Conn, interf string, path dbus.ObjectPath) *Object {
 	return &Object{conn.Object(interf, path), interf}
 }
 
-// Get queries an object property and return it as a raw dbus.Variant.
+// Get queries an object property and set its value to dest.
+// dest must be a pointer to the type of data returned by the method.
 //
-func (dev *Object) Get(property string) (dbus.Variant, error) {
-	return dev.GetProperty(dev.location(property))
-}
-
-// GetValue queries an object property and set it to dest.
-// dest must be of the same type as returned data for the method.
-//
-func (dev *Object) GetValue(name string, dest interface{}) (e error) {
-	v, e := dev.Get(name)
+func (dev *Object) Get(property string, dest interface{}) error {
+	v, e := dev.GetProperty(dev.prefix + "." + property)
 	if e != nil {
 		return e
 	}
-	return cast(v.Value(), dest)
+
+	switch val := v.Value().(type) {
+	case bool, uint32, uint64, string, dbus.ObjectPath,
+		[]uint32, []string, []dbus.ObjectPath:
+
+		reflect.ValueOf(dest).Elem().Set(reflect.ValueOf(val))
+		return nil
+
+	case map[string][]byte:
+		tmp := make(map[string]string)
+		for k, v := range val {
+			if len(v) > 0 {
+				tmp[k] = string(v[:len(v)-1]) // remove \0 at end.
+			}
+		}
+		reflect.ValueOf(dest).Elem().Set(reflect.ValueOf(tmp))
+		return nil
+	}
+	return fmt.Errorf("unknown type, %T to %T", v.Value(), dest)
 }
 
 // Set updates the given object property with value.
 //
 func (dev *Object) Set(property string, value interface{}) error {
-	return dev.SetProperty(dev.location(property), dbus.MakeVariant(value))
-}
-
-func (dev *Object) location(property string) string {
-	return dev.prefix + "." + property
+	return dev.SetProperty(dev.prefix+"."+property, value)
 }
 
 //
@@ -296,109 +318,64 @@ func (dev *Object) location(property string) string {
 // Bool queries an object property and return it as bool.
 //
 func (dev *Object) Bool(name string) (val bool, e error) {
-	e = dev.GetValue(name, &val)
+	e = dev.Get(name, &val)
 	return val, e
 }
 
 // Uint32 queries an object property and return it as uint32.
 //
 func (dev *Object) Uint32(name string) (val uint32, e error) {
-	e = dev.GetValue(name, &val)
+	e = dev.Get(name, &val)
 	return val, e
 }
 
 // Uint64 queries an object property and return it as uint64.
 //
 func (dev *Object) Uint64(name string) (val uint64, e error) {
-	e = dev.GetValue(name, &val)
+	e = dev.Get(name, &val)
 	return val, e
 }
 
 // String queries an object property and return it as string.
 //
 func (dev *Object) String(name string) (val string, e error) {
-	e = dev.GetValue(name, &val)
+	e = dev.Get(name, &val)
 	return val, e
 }
 
 // ObjectPath queries an object property and return it as string.
 //
 func (dev *Object) ObjectPath(name string) (val dbus.ObjectPath, e error) {
-	e = dev.GetValue(name, &val)
+	e = dev.Get(name, &val)
 	return val, e
 }
 
 // ListUint32 queries an object property and return it as []uint32.
 //
 func (dev *Object) ListUint32(name string) (val []uint32, e error) {
-	e = dev.GetValue(name, &val)
+	e = dev.Get(name, &val)
 	return val, e
 }
 
 // ListString queries an object property and return it as []string.
 //
 func (dev *Object) ListString(name string) (val []string, e error) {
-	e = dev.GetValue(name, &val)
+	e = dev.Get(name, &val)
 	return val, e
 }
 
 // ListPath queries an object property and return it as []dbus.ObjectPath.
 //
 func (dev *Object) ListPath(name string) (val []dbus.ObjectPath, e error) {
-	e = dev.GetValue(name, &val)
+	e = dev.Get(name, &val)
 	return val, e
 }
 
 // MapString queries an object property and return it as map[string]string.
 //
-func (dev *Object) MapString(name string) (map[string]string, error) {
-	var asbytes map[string][]byte
-	e := dev.GetValue(name, &asbytes)
-	if e != nil {
-		return nil, e
-	}
-	val := make(map[string]string)
-	for k, v := range asbytes {
-		if len(v) > 0 {
-			val[k] = string(v[:len(v)-1]) // remove \0 at end.
-		}
-	}
-	return val, nil
-}
-
-func cast(src interface{}, dest interface{}) (e error) {
-	switch c := dest.(type) {
-	case *bool:
-		*c = src.(bool)
-
-	case *uint32:
-		*c = src.(uint32)
-
-	case *uint64:
-		*c = src.(uint64)
-
-	case *string:
-		*c = src.(string)
-
-	case *dbus.ObjectPath:
-		*c = src.(dbus.ObjectPath)
-
-	case *[]uint32:
-		*c = src.([]uint32)
-
-	case *[]string:
-		*c = src.([]string)
-
-	case *[]dbus.ObjectPath:
-		*c = src.([]dbus.ObjectPath)
-
-	case *map[string][]byte:
-		*c = src.(map[string][]byte)
-
-	default:
-		e = errors.New("cast fail")
-	}
-	return
+func (dev *Object) MapString(name string) (val map[string]string, e error) {
+	e = dev.Get(name, &val)
+	return val, e
 }
 
 // SetProperty calls org.freedesktop.DBus.Properties.Set on the given object.
@@ -406,22 +383,16 @@ func cast(src interface{}, dest interface{}) (e error) {
 //
 // TODO: Should be moved to the dbus api.
 //
-func (dev *Object) SetProperty(p string, v dbus.Variant) error {
+func (dev *Object) SetProperty(p string, val interface{}) error {
 	idx := strings.LastIndex(p, ".")
 	if idx == -1 || idx+1 == len(p) {
-		return errors.New("dbus: invalid property " + p)
+		return fmt.Errorf("dbus: invalid property %s", p)
 	}
 
 	iface := p[:idx]
 	prop := p[idx+1:]
-
-	err := dev.Call("org.freedesktop.DBus.Properties.Set", 0, iface, prop, v).Err
-
-	if err != nil {
-		return err
-	}
-
-	return nil
+	v := dbus.MakeVariant(val)
+	return dev.Call("org.freedesktop.DBus.Properties.Set", 0, iface, prop, v).Err
 }
 
 //
@@ -445,7 +416,7 @@ type Types map[string]reflect.Type
 
 // Hooker defines a list of objects indexed by the methods they implement.
 // An object can be referenced multiple times.
-// If an object declares all methods, he will be referenced in every field.
+// If an object declares all methods, it will be referenced in every field.
 //   hooker:= NewHooker()
 //   hooker.AddCalls(myCalls)
 //   hooker.AddTypes(myTypes)
@@ -564,9 +535,5 @@ func UnloadModule() error {
 //
 func ModuleIsLoaded() (bool, error) {
 	out, e := exec.Command("pacmd", "list-modules").CombinedOutput()
-	if e != nil {
-		return false, e
-	}
-	isLoaded := strings.Contains(string(out), "<module-dbus-protocol>")
-	return isLoaded, nil
+	return strings.Contains(string(out), "<module-dbus-protocol>"), e
 }
