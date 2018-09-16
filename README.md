@@ -39,7 +39,7 @@ See also:
 ### Note
 
 You will have to enable the dbus module of your pulseaudio server.
-This can now be done with ```pulseaudio.LoadModule()``` function.
+This can now be done with ```pulseaudio.LoadModule()``` function (requires the pacmd command, in package ```pulseaudio-utils``` on debian).
 
 or as a permanent config by adding this line in ```/etc/pulse/default.pa```
 ```

@@ -6,6 +6,11 @@ go:
   - 1.9
   - 1.8
 
+addons:
+  apt:
+    packages:
+    - pulseaudio-utils
+
 before_install:
   - go get -u -t -v ./...
 
